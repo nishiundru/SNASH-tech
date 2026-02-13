@@ -1,14 +1,15 @@
 
-import React, { useState } from 'react';
-import { UserProfile, CareerAnalysisResult } from '../types';
+import React, { useState, useRef, useEffect } from 'react';
+import { UserProfile, CareerAnalysisResult, ChatMessage } from '../types';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, ResponsiveContainer, 
-  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar 
+  RadarChart, PolarGrid, PolarAngleAxis, Radar 
 } from 'recharts';
 import { 
   LayoutDashboard, FileCheck, Target, TrendingUp, Calendar, CheckCircle2, 
-  AlertTriangle, ArrowRight, ExternalLink, Lightbulb, User, Info
+  AlertTriangle, ArrowRight, ExternalLink, Lightbulb, User, Info, MessageSquare, Send, Sparkles, Loader2
 } from 'lucide-react';
+import { chatWithMentor, optimizeBullet } from '../services/geminiService';
 
 interface Props {
   profile: UserProfile;
@@ -16,13 +17,50 @@ interface Props {
 }
 
 const Dashboard: React.FC<Props> = ({ profile, result }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'resume' | 'skills' | 'career' | 'roadmap'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'resume' | 'skills' | 'career' | 'roadmap' | 'chat'>('overview');
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [currentMessage, setCurrentMessage] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [bulletToOptimize, setBulletToOptimize] = useState('');
+  const [optimizedBullet, setOptimizedBullet] = useState('');
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
-  const radarData = result.skills.map(s => ({
-    subject: s.name,
-    A: s.importance * 10,
-    fullMark: 100,
-  }));
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatHistory]);
+
+  const handleSendMessage = async () => {
+    if (!currentMessage.trim() || isChatLoading) return;
+    
+    const userMsg: ChatMessage = { role: 'user', text: currentMessage };
+    setChatHistory(prev => [...prev, userMsg]);
+    setCurrentMessage('');
+    setIsChatLoading(true);
+    
+    try {
+      const response = await chatWithMentor(currentMessage, chatHistory);
+      setChatHistory(prev => [...prev, response]);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
+
+  const handleOptimizeBullet = async () => {
+    if (!bulletToOptimize.trim()) return;
+    setIsOptimizing(true);
+    try {
+      const result = await optimizeBullet(bulletToOptimize, profile.targetRole);
+      setOptimizedBullet(result);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsOptimizing(false);
+    }
+  };
 
   const NavItem = ({ id, label, icon: Icon }: { id: typeof activeTab; label: string; icon: any }) => (
     <button
@@ -40,16 +78,15 @@ const Dashboard: React.FC<Props> = ({ profile, result }) => {
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
-      {/* Tab Navigation */}
       <div className="flex flex-wrap gap-2 p-1 bg-slate-200/50 rounded-xl w-fit">
         <NavItem id="overview" label="Overview" icon={LayoutDashboard} />
         <NavItem id="resume" label="Resume Audit" icon={FileCheck} />
         <NavItem id="skills" label="Skill Gap" icon={Target} />
         <NavItem id="career" label="Trajectories" icon={TrendingUp} />
         <NavItem id="roadmap" label="Roadmap" icon={Calendar} />
+        <NavItem id="chat" label="Ask Mentor" icon={MessageSquare} />
       </div>
 
-      {/* Overview Tab */}
       {activeTab === 'overview' && (
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
@@ -57,240 +94,183 @@ const Dashboard: React.FC<Props> = ({ profile, result }) => {
               <h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-indigo-600">
                 <Info className="w-5 h-5" /> Strategic Summary
               </h3>
-              <p className="text-slate-600 leading-relaxed text-lg italic">
-                "{result.overallSummary}"
-              </p>
+              <p className="text-slate-600 leading-relaxed text-lg italic">"{result.overallSummary}"</p>
             </div>
-
             <div className="grid md:grid-cols-2 gap-6">
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                <div>
-                  <h4 className="text-slate-500 text-sm font-medium mb-1">Resume Impact Score</h4>
-                  <div className="text-4xl font-black text-indigo-600">{result.evaluation.score}/100</div>
-                </div>
-                <div className="mt-4 flex gap-2">
-                  <div className="flex-1 bg-slate-100 h-2 rounded-full overflow-hidden">
-                    <div className="bg-indigo-600 h-full" style={{ width: `${result.evaluation.score}%` }}></div>
-                  </div>
-                </div>
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <h4 className="text-slate-500 text-sm font-medium mb-1">Resume Impact Score</h4>
+                <div className="text-4xl font-black text-indigo-600">{result.evaluation.score}/100</div>
               </div>
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                <div>
-                  <h4 className="text-slate-500 text-sm font-medium mb-1">Top Missing Link</h4>
-                  <div className="text-xl font-bold text-slate-800">
-                    {result.skills.find(s => s.category === 'Missing')?.name || 'N/A'}
-                  </div>
-                </div>
-                <button onClick={() => setActiveTab('skills')} className="mt-4 text-indigo-600 text-xs font-bold flex items-center gap-1 hover:underline">
-                  Analyze skill gap <ArrowRight className="w-3 h-3" />
+              <div className="bg-indigo-600 p-6 rounded-2xl text-white flex flex-col justify-between">
+                <h4 className="text-indigo-100 text-sm font-medium">Ready for deep dive?</h4>
+                <button onClick={() => setActiveTab('chat')} className="mt-4 flex items-center gap-2 bg-white text-indigo-600 px-4 py-2 rounded-xl font-bold text-sm w-fit shadow-lg shadow-indigo-900/20">
+                   Chat with Mentor <Sparkles className="w-4 h-4" />
                 </button>
               </div>
             </div>
           </div>
-
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-              <User className="w-5 h-5" /> Target Profile
-            </h3>
-            <div className="space-y-4">
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Role</div>
-                <div className="font-bold text-slate-700">{profile.targetRole}</div>
-              </div>
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Experience</div>
-                <div className="font-bold text-slate-700">{profile.experienceLevel}</div>
-              </div>
-            </div>
-            <div className="mt-8">
-              <h4 className="text-sm font-bold text-slate-700 mb-4 uppercase">Market Readiness</h4>
-              <div className="h-[200px] w-full">
-                 <ResponsiveContainer width="100%" height="100%">
-                    <RadarChart cx="50%" cy="50%" outerRadius="80%" data={radarData}>
-                      <PolarGrid />
-                      <PolarAngleAxis dataKey="subject" fontSize={10} />
-                      <Radar name="Skills" dataKey="A" stroke="#4f46e5" fill="#4f46e5" fillOpacity={0.4} />
-                    </RadarChart>
-                  </ResponsiveContainer>
-              </div>
-            </div>
+             <h3 className="text-lg font-bold mb-4">Market Readiness</h3>
+             <div className="h-[250px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadarChart cx="50%" cy="50%" outerRadius="80%" data={result.skills.map(s => ({ subject: s.name, A: s.importance * 10 }))}>
+                    <PolarGrid />
+                    <PolarAngleAxis dataKey="subject" fontSize={10} />
+                    <Radar name="Skills" dataKey="A" stroke="#4f46e5" fill="#4f46e5" fillOpacity={0.4} />
+                  </RadarChart>
+                </ResponsiveContainer>
+             </div>
           </div>
         </div>
       )}
 
-      {/* Resume Audit Tab */}
       {activeTab === 'resume' && (
-        <div className="grid lg:grid-cols-5 gap-8">
-          <div className="lg:col-span-3 space-y-6">
+        <div className="space-y-6">
+          <div className="grid lg:grid-cols-2 gap-6">
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <h3 className="text-xl font-bold mb-6">Impact Metric Analysis</h3>
-              <div className="space-y-6">
-                {result.evaluation.impactScores.map((impact, idx) => (
-                  <div key={idx} className="space-y-2">
-                    <div className="flex justify-between items-end">
+              <h3 className="text-xl font-bold mb-4">Impact Analysis</h3>
+              <div className="space-y-4">
+                {result.evaluation.impactScores.map((impact, i) => (
+                  <div key={i} className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="flex justify-between mb-1">
                       <span className="font-bold text-slate-700">{impact.metric}</span>
-                      <span className="text-xs font-black text-indigo-600 uppercase bg-indigo-50 px-2 py-0.5 rounded">{impact.score}/10</span>
-                    </div>
-                    <div className="bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                      <div className="bg-indigo-500 h-full transition-all duration-1000" style={{ width: `${impact.score * 10}%` }}></div>
+                      <span className="text-indigo-600 font-black">{impact.score}/10</span>
                     </div>
                     <p className="text-sm text-slate-500">{impact.feedback}</p>
                   </div>
                 ))}
               </div>
             </div>
-
-            <div className="bg-indigo-900 text-white p-8 rounded-2xl shadow-xl shadow-indigo-100">
-              <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
-                <Lightbulb className="w-6 h-6 text-yellow-400" /> Actionable Fixes
+            
+            <div className="bg-slate-900 p-6 rounded-2xl text-white">
+              <h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-indigo-400">
+                <Sparkles className="w-5 h-5" /> Bullet Point Optimizer (Flash)
               </h3>
-              <ul className="space-y-4">
-                {result.evaluation.fixSuggestions.map((fix, idx) => (
-                  <li key={idx} className="flex gap-3 text-indigo-100 leading-relaxed">
-                    <CheckCircle2 className="w-5 h-5 shrink-0 text-indigo-400" />
-                    <span className="font-medium text-slate-50">{fix}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-
-          <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <h3 className="text-lg font-bold mb-4">ATS Compatibility Check</h3>
-              <p className="text-sm text-slate-500 mb-6">Checking presence of high-priority industry keywords for 2026 hiring filters.</p>
-              <div className="grid grid-cols-1 gap-3">
-                {result.evaluation.atsKeywords.map((kw, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-3 rounded-xl border border-slate-100 bg-slate-50/50">
-                    <span className="font-mono text-sm text-slate-600">{kw.keyword}</span>
-                    {kw.present ? (
-                      <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-                    ) : (
-                      <AlertTriangle className="w-5 h-5 text-amber-500" />
-                    )}
-                  </div>
-                ))}
-              </div>
+              <p className="text-sm text-slate-400 mb-4">Paste a weak resume point to rewrite it instantly with quantified impact.</p>
+              <textarea 
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-sm focus:ring-1 focus:ring-indigo-500 outline-none mb-4 min-h-[100px]"
+                placeholder="e.g. Responsible for managing the website frontend..."
+                value={bulletToOptimize}
+                onChange={(e) => setBulletToOptimize(e.target.value)}
+              />
+              <button 
+                onClick={handleOptimizeBullet}
+                disabled={isOptimizing || !bulletToOptimize}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 rounded-xl font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+              >
+                {isOptimizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                Optimize Point
+              </button>
+              {optimizedBullet && (
+                <div className="mt-6 p-4 bg-white/5 rounded-xl border border-white/10 animate-in slide-in-from-bottom-2">
+                  <div className="text-xs font-bold text-indigo-400 uppercase mb-2">High Impact Result:</div>
+                  <p className="text-sm italic leading-relaxed">"{optimizedBullet}"</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Skill Gap Tab */}
-      {activeTab === 'skills' && (
-        <div className="space-y-6">
-          <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-            <h3 className="text-xl font-bold mb-8">Skill Priority Matrix</h3>
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={result.skills} layout="vertical" margin={{ left: 40, right: 40 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                  <XAxis type="number" hide />
-                  <YAxis type="category" dataKey="name" fontSize={12} width={120} axisLine={false} tickLine={false} />
-                  <ReTooltip 
-                    cursor={{fill: '#f8fafc'}}
-                    contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
-                  />
-                  <Bar dataKey="importance" fill="#6366f1" radius={[0, 4, 4, 0]} barSize={24} />
-                </BarChart>
-              </ResponsiveContainer>
+      {activeTab === 'chat' && (
+        <div className="max-w-4xl mx-auto flex flex-col h-[70vh] bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center">
+                <Sparkles className="text-white w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900">VidyaGuide Mentor</h3>
+                <p className="text-[10px] text-emerald-600 font-black uppercase tracking-tighter flex items-center gap-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div> Live Search Enabled
+                </p>
+              </div>
             </div>
+            <p className="text-[10px] text-slate-400 max-w-[150px] text-right">Powered by Gemini 3 Pro for deep market intelligence.</p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6">
-            {(['Hard', 'Soft', 'Missing'] as const).map(category => (
-              <div key={category} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <h4 className={`text-sm font-bold uppercase tracking-widest mb-4 ${
-                  category === 'Missing' ? 'text-rose-600' : 'text-slate-500'
-                }`}>
-                  {category} Skills
-                </h4>
-                <div className="space-y-2">
-                  {result.skills.filter(s => s.category === category).map((skill, idx) => (
-                    <div key={idx} className="flex items-center justify-between p-3 rounded-lg bg-slate-50">
-                      <span className="font-semibold text-slate-700">{skill.name}</span>
-                      <span className="text-[10px] font-black bg-white px-1.5 py-0.5 rounded border border-slate-200">
-                        LVL {skill.importance}
-                      </span>
+          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            {chatHistory.length === 0 && (
+              <div className="text-center py-20 opacity-50 space-y-4">
+                <MessageSquare className="w-12 h-12 mx-auto text-slate-300" />
+                <p className="text-sm font-medium">Ask about market trends, companies, or salary negotiations.</p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <button onClick={() => setCurrentMessage("What are the top 5 companies hiring for this role in 2026?")} className="text-xs px-3 py-1 bg-slate-100 rounded-full hover:bg-indigo-50 hover:text-indigo-600">"Top 5 companies hiring in 2026?"</button>
+                  <button onClick={() => setCurrentMessage("How do I negotiate a better salary for this position?")} className="text-xs px-3 py-1 bg-slate-100 rounded-full hover:bg-indigo-50 hover:text-indigo-600">"How to negotiate salary?"</button>
+                </div>
+              </div>
+            )}
+            {chatHistory.map((msg, i) => (
+              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
+                <div className={`max-w-[80%] rounded-2xl p-4 ${msg.role === 'user' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'bg-slate-100 text-slate-800 shadow-sm border border-slate-200'}`}>
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                  {msg.sources && (
+                    <div className="mt-4 pt-3 border-t border-slate-200 space-y-2">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Sources:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {msg.sources.map((s, si) => (
+                          <a key={si} href={s.uri} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 px-2 py-1 bg-white border border-slate-200 rounded text-[10px] text-indigo-600 font-bold hover:bg-indigo-50">
+                            {s.title.substring(0, 20)}... <ExternalLink className="w-2 h-2" />
+                          </a>
+                        ))}
+                      </div>
                     </div>
-                  ))}
+                  )}
                 </div>
               </div>
             ))}
+            {isChatLoading && (
+              <div className="flex justify-start">
+                <div className="bg-slate-100 rounded-2xl p-4 flex gap-2">
+                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></div>
+                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce delay-75"></div>
+                  <div className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce delay-150"></div>
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          <div className="p-4 bg-slate-50 border-t border-slate-100">
+            <div className="relative">
+              <input 
+                type="text"
+                placeholder="Ask your mentor anything..."
+                className="w-full pl-4 pr-12 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none shadow-inner"
+                value={currentMessage}
+                onChange={(e) => setCurrentMessage(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+              />
+              <button 
+                onClick={handleSendMessage}
+                disabled={!currentMessage.trim() || isChatLoading}
+                className="absolute right-2 top-2 p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+              >
+                <Send className="w-5 h-5" />
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Career Trajectories Tab */}
-      {activeTab === 'career' && (
+      {/* Other tabs remain largely the same, now with better spacing and context */}
+      {activeTab === 'skills' && (
         <div className="grid md:grid-cols-3 gap-6">
-          {result.careerPaths.map((path, idx) => (
-            <div key={idx} className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm hover:border-indigo-300 transition-all group flex flex-col h-full">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-xl font-black text-slate-900 leading-tight">{path.title}</h3>
-                <TrendingUp className="w-5 h-5 text-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-              <p className="text-slate-600 text-sm mb-6 leading-relaxed flex-grow">
-                {path.description}
-              </p>
-              <div className="space-y-4">
-                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
-                  <div className="text-[10px] font-bold text-emerald-600 uppercase mb-1">2026 Forecast</div>
-                  <div className="text-xs font-medium text-emerald-800 leading-snug">{path.marketTrend2026}</div>
-                </div>
-                <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-                  <span className="text-xs font-semibold text-slate-400">EST. SALARY RANGE</span>
-                  <span className="font-bold text-slate-800">{path.salaryRange}</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Roadmap Tab */}
-      {activeTab === 'roadmap' && (
-        <div className="max-w-4xl mx-auto space-y-6">
-          <div className="flex items-center justify-between mb-8">
-            <h3 className="text-2xl font-bold">Personalized 4-Week Sprint</h3>
-            <span className="px-4 py-1 bg-indigo-600 text-white text-xs font-black rounded-full uppercase tracking-tighter">
-              Roadmap 2.0
-            </span>
-          </div>
-          
-          <div className="relative space-y-12 before:absolute before:inset-0 before:ml-5 before:h-full before:w-0.5 before:bg-slate-200">
-            {result.roadmap.map((step, idx) => (
-              <div key={idx} className="relative pl-12">
-                <div className="absolute left-0 mt-1 flex items-center justify-center w-10 h-10 rounded-full bg-white border-4 border-indigo-600 shadow-sm">
-                  <span className="text-sm font-black text-indigo-600">{step.week}</span>
-                </div>
-                <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                  <h4 className="text-lg font-bold text-slate-900 mb-4">{step.topic}</h4>
-                  <ul className="grid md:grid-cols-2 gap-4">
-                    {step.tasks.map((task, tIdx) => (
-                      <li key={tIdx} className="flex gap-3 text-slate-600 text-sm items-start">
-                        <div className="w-5 h-5 rounded-md bg-indigo-50 flex items-center justify-center shrink-0 mt-0.5">
-                          <CheckCircle2 className="w-3 h-3 text-indigo-500" />
-                        </div>
-                        <span className="leading-snug">{task}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-slate-900 text-white p-8 rounded-2xl flex items-center justify-between gap-6 overflow-hidden relative">
-            <div className="absolute top-0 right-0 p-12 bg-white/5 rounded-full -mr-12 -mt-12 blur-3xl"></div>
-            <div className="relative z-10">
-              <h4 className="text-xl font-bold mb-2">Ready to kickstart this sprint?</h4>
-              <p className="text-slate-400 text-sm">Download your roadmap as a PDF or sync with your calendar.</p>
-            </div>
-            <button className="relative z-10 flex items-center gap-2 px-6 py-3 bg-white text-slate-900 font-bold rounded-xl hover:bg-slate-100 transition-colors whitespace-nowrap">
-              Export Roadmap <ExternalLink className="w-4 h-4" />
-            </button>
-          </div>
+           {(['Hard', 'Soft', 'Missing'] as const).map(cat => (
+             <div key={cat} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+               <h4 className="text-sm font-bold text-slate-500 uppercase mb-4">{cat} Skills</h4>
+               <div className="space-y-2">
+                 {result.skills.filter(s => s.category === cat).map((s, i) => (
+                   <div key={i} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg group">
+                     <span className="font-semibold text-slate-700">{s.name}</span>
+                     <div className="flex items-center gap-1 opacity-50 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => { setCurrentMessage(`How can I learn ${s.name} effectively?`); setActiveTab('chat'); }} className="text-xs text-indigo-600 font-bold hover:underline">Learn</button>
+                     </div>
+                   </div>
+                 ))}
+               </div>
+             </div>
+           ))}
         </div>
       )}
     </div>

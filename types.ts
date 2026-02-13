@@ -39,6 +39,12 @@ export interface CareerAnalysisResult {
   overallSummary: string;
 }
 
+export interface ChatMessage {
+  role: 'user' | 'model';
+  text: string;
+  sources?: { title: string; uri: string }[];
+}
+
 export enum AppState {
   ONBOARDING = 'ONBOARDING',
   ANALYZING = 'ANALYZING',
